@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from dotenv import load_dotenv
-import psycopg2
+import pg8000
 import streamlit as st
 from datetime import datetime, date
 
@@ -13,7 +13,7 @@ def _get_conn_info() -> dict:
     return {
         "host": os.getenv("DB_HOST"),
         "port": int(os.getenv("DB_PORT")),
-        "dbname": os.getenv("DB_NAME"),
+        "database": os.getenv("DB_NAME"),  # pg8000 usa 'database'
         "user": os.getenv("DB_USER"),
         "password": os.getenv("DB_PASSWORD"),
     }
@@ -30,7 +30,7 @@ def load_data(filtro: str = "") -> pd.DataFrame:
     """
     conn_info = _get_conn_info()
     try:
-        with psycopg2.connect(**conn_info) as conn:
+        with pg8000.connect(**conn_info) as conn:
             query = f"""
                 SELECT *
                 FROM vw_kardex_credito_produto_usuario

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from dotenv import load_dotenv
-import psycopg2
+import pg8000
 
 # =========================================================
 # Conexão básica ao banco
@@ -11,7 +11,7 @@ def _get_conn_info() -> dict:
     return {
         "host": os.getenv("DB_HOST"),
         "port": int(os.getenv("DB_PORT")),
-        "dbname": os.getenv("DB_NAME"),
+        "database": os.getenv("DB_NAME"),  # pg8000 usa 'database'
         "user": os.getenv("DB_USER"),
         "password": os.getenv("DB_PASSWORD"),
     }
@@ -19,7 +19,9 @@ def _get_conn_info() -> dict:
 def _run_query(query: str) -> pd.DataFrame:
     conn_info = _get_conn_info()
     try:
-        with psycopg2.connect(**conn_info) as conn:
+        # Conecta usando pg8000 com os parâmetros acima
+        with pg8000.connect(**conn_info) as conn:
+            # Pandas consegue usar essa conexão com read_sql_query
             df = pd.read_sql_query(query, conn)
         return df
     except Exception as e:
