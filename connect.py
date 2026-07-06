@@ -11,10 +11,11 @@ from datetime import datetime, date
 def _get_conn_info() -> dict:
     """
     Lê as variáveis de ambiente de conexão com o banco.
-    Em ambiente local, carrega do .env.
+    Em ambiente local, carrega do .env se existir.
     Em produção (Streamlit Cloud), use Secrets / env vars.
     """
-    # Carrega .env apenas se existir (evita erro em produção)
+
+    # Carrega .env apenas se existir (evita erro/overhead em produção)
     if os.path.exists(".env"):
         load_dotenv()
 
@@ -25,6 +26,7 @@ def _get_conn_info() -> dict:
     password = os.getenv("DB_PASSWORD")
 
     if not all([host, port, db_name, user, password]):
+        # Em produção (Streamlit Cloud), isso ajuda a identificar se faltou configurar secrets
         raise ValueError(
             "Variáveis de ambiente de banco incompletas. "
             "Verifique DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD."
@@ -48,7 +50,13 @@ def load_data(filtro: str = "") -> pd.DataFrame:
     Retorna:
         DataFrame com os dados consultados.
     """
-    conn_info = _get_conn_info()
+    try:
+        conn_info = _get_conn_info()
+    except ValueError as e:
+        # Mostra erro amigável no app Streamlit
+        st.error(str(e))
+        return pd.DataFrame()
+
     try:
         with pg8000.connect(**conn_info) as conn:
             query = f"""
@@ -59,7 +67,6 @@ def load_data(filtro: str = "") -> pd.DataFrame:
             df = pd.read_sql_query(query, conn)
         return df
     except Exception as e:
-        # Em app Streamlit, é melhor usar st.error para feedback
         st.error(f"Erro ao conectar ao PostgreSQL ou executar query: {e}")
         return pd.DataFrame()
 
@@ -72,6 +79,7 @@ def load_data_today() -> pd.DataFrame:
     Considera a coluna DtNow como referência de data/hora.
     """
     hoje = date.today().strftime("%Y-%m-%d")
+    # Usa nome real da coluna da view (DtNow) no filtro SQL
     filtro = f"""WHERE "DtNow"::date = '{hoje}'"""
     return load_data(filtro=filtro)
 
@@ -85,6 +93,7 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
+    # Renomear colunas da view para nomes usados no restante da aplicação
     rename_map = {
         "Tipo": "tipo",
         "Grupo": "grupo",
@@ -102,17 +111,23 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
+    # Conversão de data/hora
     if "data_hora_mov" in df.columns:
         df["data_hora_mov"] = pd.to_datetime(df["data_hora_mov"], errors="coerce")
         df["data"] = df["data_hora_mov"].dt.date
         df["ano"] = df["data_hora_mov"].dt.year
         df["mes"] = df["data_hora_mov"].dt.month
 
-    colunas_numericas = ["qtd", "movimentacoes"]
+    # Colunas numéricas
+    colunas_numericas = [
+        "qtd",
+        "movimentacoes",
+    ]
     for col in colunas_numericas:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
+    # Fator multiplicador: se não existir na view, assume 1
     if "fator_multiplicador" not in df.columns:
         df["fator_multiplicador"] = 1.0
     else:
@@ -120,6 +135,7 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
             df["fator_multiplicador"], errors="coerce"
         ).fillna(1.0)
 
+    # Colunas de texto
     colunas_texto = [
         "tipo",
         "grupo",
@@ -128,7 +144,7 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
         "produto",
         "marca",
         "curva",
-        "operacao",
+        "operacao",  # pode não existir, mas mantemos por compatibilidade com pesos
     ]
     for col in colunas_texto:
         if col in df.columns:
@@ -145,14 +161,16 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
 # Cache de dados para o dashboard de corrida (TTL e retorno de linhas)
 # =========================================================
 @st.cache_data(ttl=60, show_spinner="Carregando dados mais recentes do dia corrente...")
-def load_data_cached_incremental(current_time: datetime = None) -> tuple[pd.DataFrame, int]:
+def load_data_cached_incremental(
+    current_time: datetime = None,
+) -> tuple[pd.DataFrame, int]:
     """
     Carrega apenas os dados do dia corrente da view vw_kardex_credito_produto_usuario,
     aplicando cache com TTL de 60s.
     Retorna:
         tuple[pd.DataFrame, int]: O DataFrame preparado e o número de linhas lidas.
     """
-    df = load_data_today()
+    df = load_data_today()  # Somente dia corrente
     linhas_lidas = len(df)
 
     if not df.empty:
