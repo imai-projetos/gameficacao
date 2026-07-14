@@ -21,6 +21,32 @@ st.title("📈 Histórico de Pontuação por Colaborador")
 status_placeholder = st.empty()
 
 # =========================================================
+# Helper para tornar DataFrame amigável ao Arrow/Streamlit
+# =========================================================
+def make_arrow_friendly(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ajusta tipos de colunas para evitar erros na conversão para Arrow/Streamlit.
+    - Converte colunas problemáticas (como 'data' em object) para tipos claros.
+    """
+    df = df.copy()
+
+    # Tratar coluna 'data' explicitamente
+    if "data" in df.columns and df["data"].dtype == "object":
+        # Tenta interpretar como data
+        try:
+            df["data"] = pd.to_datetime(df["data"], errors="raise")
+        except Exception:
+            # Se não for possível, usa string (pelo menos Arrow sabe o tipo)
+            df["data"] = df["data"].astype("string")
+
+    # Converter todas as colunas object para string (evita vários problemas com Arrow)
+    for col in df.select_dtypes(include=["object"]).columns:
+        df[col] = df[col].astype("string")
+
+    return df
+
+
+# =========================================================
 # Funções auxiliares
 # =========================================================
 @st.cache_data
@@ -37,12 +63,14 @@ def carregar_dados_com_pontos_periodo(
     if df_hist.empty:
         return pd.DataFrame()
 
+    # Prepara dados (renomeia colunas, normaliza tipos, cria 'data')
     df_hist = prepare_data(df_hist)
 
-    if "data_hora_mov" in df_hist.columns:
-        df_hist["data"] = pd.to_datetime(df_hist["data_hora_mov"]).dt.date
-    elif "data" in df_hist.columns:
-        df_hist["data"] = pd.to_datetime(df_hist["data"]).dt.date
+    # Garante que a coluna 'data' exista e esteja em formato de datetime
+    if "data" in df_hist.columns:
+        df_hist["data"] = pd.to_datetime(df_hist["data"], errors="coerce")
+    elif "data_hora_mov" in df_hist.columns:
+        df_hist["data"] = pd.to_datetime(df_hist["data_hora_mov"], errors="coerce")
     else:
         st.error("Não foi possível identificar coluna de data nos dados históricos.")
         return pd.DataFrame()
@@ -123,6 +151,7 @@ def criar_matriz_pontos(df_agregado: pd.DataFrame) -> pd.DataFrame:
         .sort_index()
     )
 
+    # Ordena colunas (conferentes) alfabeticamente
     matriz = matriz.reindex(sorted(matriz.columns), axis=1)
     matriz = matriz.reset_index()
 
@@ -241,8 +270,10 @@ df_agregado = agregar_por_dia_e_colaborador(df_periodo)
 
 st.subheader("📅 Pontuação diária por colaborador")
 
+df_agregado_arrow = make_arrow_friendly(df_agregado)
+
 st.dataframe(
-    df_agregado,
+    df_agregado_arrow,
     use_container_width=True,
     hide_index=True,  # esconder índice das linhas
 )
@@ -258,8 +289,10 @@ df_matriz_total = adicionar_linha_total_matriz(df_matriz)
 if df_matriz_total.empty:
     st.info("Nenhum dado para montar a matriz de pontuação.")
 else:
+    df_matriz_total_arrow = make_arrow_friendly(df_matriz_total)
+
     st.dataframe(
-        df_matriz_total,
+        df_matriz_total_arrow,
         use_container_width=True,
         hide_index=True,  # esconder índice das linhas
     )
