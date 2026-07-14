@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 from datetime import date, datetime
+import pytz
 
 from connect import prepare_data, load_data_periodo
 from pontuacao import carregar_pesos, calcular_pontos
@@ -210,8 +211,10 @@ if df_periodo.empty:
     st.warning("Nenhum dado encontrado para o período selecionado.")
     st.stop()
 
-# Atualiza status de última atualização
-agora = datetime.now()
+# Atualiza status de última atualização (ajustando fuso horário)
+timezone = pytz.timezone("America/Sao_Paulo")
+agora = datetime.now(timezone)
+
 status_placeholder.caption(
     f"🕒 Última atualização: **{agora.strftime('%d/%m/%Y %H:%M:%S')}** | "
     f"📊 Registros no período: **{len(df_periodo):,}**"
