@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
-from datetime import date, datetime
-import pytz
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from connect import prepare_data, load_data_periodo
 from pontuacao import carregar_pesos, calcular_pontos
@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="Histórico de Pontuação por Colaborador",
     layout="wide",
     page_icon="📈",
-    initial_sidebar_state="collapsed",  # sidebar recolhido ao iniciar
+    initial_sidebar_state="collapsed",
 )
 
 st.title("📈 Histórico de Pontuação por Colaborador")
@@ -27,20 +27,17 @@ status_placeholder = st.empty()
 def make_arrow_friendly(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ajusta tipos de colunas para evitar erros na conversão para Arrow/Streamlit.
-    - Converte colunas problemáticas (como 'data' em object) para tipos claros.
     """
     df = df.copy()
 
     # Tratar coluna 'data' explicitamente
     if "data" in df.columns and df["data"].dtype == "object":
-        # Tenta interpretar como data
         try:
             df["data"] = pd.to_datetime(df["data"], errors="raise")
         except Exception:
-            # Se não for possível, usa string (pelo menos Arrow sabe o tipo)
             df["data"] = df["data"].astype("string")
 
-    # Converter todas as colunas object para string (evita vários problemas com Arrow)
+    # Converter todas as colunas object para string
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = df[col].astype("string")
 
@@ -64,10 +61,9 @@ def carregar_dados_com_pontos_periodo(
     if df_hist.empty:
         return pd.DataFrame()
 
-    # Prepara dados (renomeia colunas, normaliza tipos, cria 'data')
     df_hist = prepare_data(df_hist)
 
-    # Garante que a coluna 'data' exista e esteja em formato de datetime
+    # Garante que 'data' exista e esteja em formato de datetime
     if "data" in df_hist.columns:
         df_hist["data"] = pd.to_datetime(df_hist["data"], errors="coerce")
     elif "data_hora_mov" in df_hist.columns:
@@ -83,17 +79,6 @@ def carregar_dados_com_pontos_periodo(
 
 
 def agregar_por_dia_e_colaborador(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrega por dia e colaborador e retorna as colunas:
-    - data
-    - conferente
-    - movimentacoes (do dia)
-    - pontos_dia
-    - local  -> todos os locais movimentados naquele dia (concatenados)
-    - grupo  -> todos os grupos movimentados naquele dia (concatenados)
-    - marca  -> todas as marcas movimentadas naquele dia (concatenadas)
-    - curva  -> todas as curvas movimentadas naquele dia (concatenadas)
-    """
     if df.empty:
         return df
 
@@ -131,12 +116,6 @@ def agregar_por_dia_e_colaborador(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def criar_matriz_pontos(df_agregado: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cria uma matriz onde:
-    - linhas = datas
-    - colunas = conferentes
-    - valores = pontos_dia
-    """
     if df_agregado.empty:
         return df_agregado
 
@@ -152,7 +131,6 @@ def criar_matriz_pontos(df_agregado: pd.DataFrame) -> pd.DataFrame:
         .sort_index()
     )
 
-    # Ordena colunas (conferentes) alfabeticamente
     matriz = matriz.reindex(sorted(matriz.columns), axis=1)
     matriz = matriz.reset_index()
 
@@ -160,11 +138,6 @@ def criar_matriz_pontos(df_agregado: pd.DataFrame) -> pd.DataFrame:
 
 
 def adicionar_linha_total_matriz(df_matriz: pd.DataFrame) -> pd.DataFrame:
-    """
-    Adiciona linha de total na matriz:
-    - última linha com 'TOTAL' na coluna de data
-    - soma das colunas (pontos de cada colaborador no período)
-    """
     if df_matriz.empty:
         return df_matriz
 
@@ -184,7 +157,6 @@ def adicionar_linha_total_matriz(df_matriz: pd.DataFrame) -> pd.DataFrame:
 # =========================================================
 st.sidebar.header("🔎 Filtros de Histórico")
 
-# Período padrão: últimos 7 dias
 hoje = date.today()
 default_inicio = date(hoje.year, hoje.month, max(1, hoje.day - 7))
 
@@ -195,12 +167,11 @@ if data_inicio > data_fim:
     st.sidebar.error("Data inicial não pode ser maior que a data final.")
     st.stop()
 
-# Botão de atualizar (recarrega cache da função)
 atualizar = st.sidebar.button("🔄 Atualizar dados")
 
 if atualizar:
     st.cache_data.clear()
-    st.rerun()  # corrige o erro: experimental_rerun -> rerun
+    st.rerun()
 
 # =========================================================
 # Carrega dados com pontos para o período
@@ -211,9 +182,10 @@ if df_periodo.empty:
     st.warning("Nenhum dado encontrado para o período selecionado.")
     st.stop()
 
-# Atualiza status de última atualização (ajustando fuso horário)
-timezone = pytz.timezone("America/Sao_Paulo")
-agora = datetime.now(timezone)
+# Atualiza status de última atualização com fuso horário correto
+utc_now = datetime.now(timezone.utc)
+br_tz = ZoneInfo("America/Sao_Paulo")
+agora = utc_now.astimezone(br_tz)
 
 status_placeholder.caption(
     f"🕒 Última atualização: **{agora.strftime('%d/%m/%Y %H:%M:%S')}** | "
@@ -278,7 +250,7 @@ df_agregado_arrow = make_arrow_friendly(df_agregado)
 st.dataframe(
     df_agregado_arrow,
     use_container_width=True,
-    hide_index=True,  # esconder índice das linhas
+    hide_index=True,
 )
 
 # =========================================================
@@ -293,21 +265,16 @@ if df_matriz_total.empty:
     st.info("Nenhum dado para montar a matriz de pontuação.")
 else:
     df_matriz_total_arrow = make_arrow_friendly(df_matriz_total)
-
     st.dataframe(
         df_matriz_total_arrow,
         use_container_width=True,
-        hide_index=True,  # esconder índice das linhas
+        hide_index=True,
     )
 
 # =========================================================
 # Exportar para Excel (histórico detalhado)
 # =========================================================
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """
-    Converte DataFrame em bytes de um arquivo Excel (XLSX)
-    para usar no download_button.
-    """
     from io import BytesIO
     import xlsxwriter
 
