@@ -84,6 +84,36 @@ def load_data_today() -> pd.DataFrame:
     return load_data(filtro=filtro)
 
 # =========================================================
+# Carregar período de datas (NOVO, para o histórico)
+# =========================================================
+def load_data_periodo(data_inicio: date, data_fim: date) -> pd.DataFrame:
+    """
+    Carrega dados da view vw_kardex_credito_produto_usuario para um período de datas.
+    Considera a coluna DtNow como referência de data/hora.
+
+    Essa função NÃO é usada pelo main.py (corrida),
+    é pensada para o histórico (historico.py).
+    """
+    try:
+        conn_info = _get_conn_info()
+    except ValueError as e:
+        st.error(str(e))
+        return pd.DataFrame()
+
+    try:
+        with pg8000.connect(**conn_info) as conn:
+            query = f"""
+                SELECT *
+                FROM vw_kardex_credito_produto_usuario
+                WHERE "DtNow"::date BETWEEN '{data_inicio}' AND '{data_fim}'
+            """
+            df = pd.read_sql_query(query, conn)
+        return df
+    except Exception as e:
+        st.error(f"Erro ao conectar ao PostgreSQL ou executar query (período): {e}")
+        return pd.DataFrame()
+
+# =========================================================
 # Preparação de dados
 # =========================================================
 def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
