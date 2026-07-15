@@ -27,15 +27,22 @@ status_placeholder = st.empty()
 def make_arrow_friendly(df: pd.DataFrame) -> pd.DataFrame:
     """
     Ajusta tipos de colunas para evitar erros na conversão para Arrow/Streamlit.
+    - Garante que 'data' seja datetime64[ns] ou string.
+    - Converte colunas object para string.
     """
     df = df.copy()
 
     # Tratar coluna 'data' explicitamente
-    if "data" in df.columns and df["data"].dtype == "object":
-        try:
-            df["data"] = pd.to_datetime(df["data"], errors="raise")
-        except Exception:
-            df["data"] = df["data"].astype("string")
+    if "data" in df.columns:
+        # Se já for datetime, mantemos
+        if not pd.api.types.is_datetime64_any_dtype(df["data"]):
+            # Tentar converter para datetime
+            df["data"] = pd.to_datetime(df["data"], errors="coerce")
+
+        # Para evitar problemas de timezone, garantir que seja "naive" (sem tz)
+        if pd.api.types.is_datetime64_any_dtype(df["data"]):
+            # Remove qualquer informação de timezone
+            df["data"] = df["data"].dt.tz_localize(None)
 
     # Converter todas as colunas object para string
     for col in df.select_dtypes(include=["object"]).columns:
@@ -69,8 +76,12 @@ def carregar_dados_com_pontos_periodo(
     elif "data_hora_mov" in df_hist.columns:
         df_hist["data"] = pd.to_datetime(df_hist["data_hora_mov"], errors="coerce")
     else:
-        st.error("Não foi possível identificar coluna de data nos dados históricos.")
+        # Em vez de st.error aqui (que pode ser chamado dentro de cache_data),
+        # retornamos DF vazio e tratamos fora.
         return pd.DataFrame()
+
+    # Garantir que 'data' seja apenas a data (sem horário) para agregação
+    df_hist["data"] = df_hist["data"].dt.date
 
     pesos = carregar_pesos()
     df_hist = calcular_pontos(df_hist, pesos, fator_escala_pontos=10.0)
@@ -82,15 +93,24 @@ def agregar_por_dia_e_colaborador(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    for col in ["data", "conferente", "movimentacoes", "pontos", "local", "grupo", "marca", "curva"]:
+    # Garantir colunas necessárias
+    for col in ["data", "conferente", "movimentacoes", "pontos",
+                "local", "grupo", "marca", "curva"]:
         if col not in df.columns:
             if col in ["movimentacoes", "pontos"]:
                 df[col] = 0
             else:
                 df[col] = ""
 
+    # Converter 'data' para datetime novamente (com hora 00:00),
+    # para facilitar ordenação e exibição
+    if not pd.api.types.is_datetime64_any_dtype(df["data"]):
+        df["data"] = pd.to_datetime(df["data"], errors="coerce")
+
     def join_unicos(series: pd.Series) -> str:
-        valores = sorted({str(v) for v in series if pd.notna(v) and str(v).strip() != ""})
+        valores = sorted(
+            {str(v) for v in series if pd.notna(v) and str(v).strip() != ""}
+        )
         return ", ".join(valores)
 
     agregados = (
@@ -109,7 +129,8 @@ def agregar_por_dia_e_colaborador(df: pd.DataFrame) -> pd.DataFrame:
     agregados["pontos_dia"] = agregados["pontos_dia"].round(2)
 
     agregados = agregados[
-        ["data", "conferente", "movimentacoes", "pontos_dia", "local", "grupo", "marca", "curva"]
+        ["data", "conferente", "movimentacoes", "pontos_dia",
+         "local", "grupo", "marca", "curva"]
     ].sort_values(["conferente", "data"])
 
     return agregados
@@ -118,6 +139,10 @@ def agregar_por_dia_e_colaborador(df: pd.DataFrame) -> pd.DataFrame:
 def criar_matriz_pontos(df_agregado: pd.DataFrame) -> pd.DataFrame:
     if df_agregado.empty:
         return df_agregado
+
+    # Garantir que 'data' seja datetime para pivot
+    if not pd.api.types.is_datetime64_any_dtype(df_agregado["data"]):
+        df_agregado["data"] = pd.to_datetime(df_agregado["data"], errors="coerce")
 
     matriz = (
         df_agregado
@@ -141,13 +166,19 @@ def adicionar_linha_total_matriz(df_matriz: pd.DataFrame) -> pd.DataFrame:
     if df_matriz.empty:
         return df_matriz
 
-    cols_pontos = [c for c in df_matriz.columns if c != "data"]
-    totais = {c: df_matriz[c].sum() for c in cols_pontos}
-    totais["data"] = "TOTAL"
+    df = df_matriz.copy()
 
+    cols_pontos = [c for c in df.columns if c != "data"]
+    totais = {c: df[c].sum() for c in cols_pontos}
+
+    # Para evitar mistura de tipos na coluna 'data',
+    # vamos transformar a coluna em string antes de adicionar TOTAL.
+    df["data"] = df["data"].dt.strftime("%d/%m/%Y")
+
+    totais["data"] = "TOTAL"
     linha_total = pd.DataFrame([totais])
 
-    df_matriz_total = pd.concat([df_matriz, linha_total], ignore_index=True)
+    df_matriz_total = pd.concat([df, linha_total], ignore_index=True)
 
     return df_matriz_total
 
@@ -179,7 +210,8 @@ if atualizar:
 df_periodo = carregar_dados_com_pontos_periodo(data_inicio, data_fim)
 
 if df_periodo.empty:
-    st.warning("Nenhum dado encontrado para o período selecionado.")
+    st.warning("Nenhum dado encontrado para o período selecionado "
+               "ou coluna de data não identificada.")
     st.stop()
 
 # Atualiza status de última atualização com fuso horário correto
@@ -196,7 +228,7 @@ status_placeholder.caption(
 st.sidebar.subheader("🏢 Filial")
 
 if "local" in df_periodo.columns:
-    filiais = sorted(df_periodo["local"].dropna().unique())
+    filiais = sorted(df_periodo["local"].dropna().astype(str).unique())
 else:
     filiais = []
 
@@ -206,7 +238,7 @@ if filiais:
         options=filiais,
         default=filiais,
     )
-    df_periodo = df_periodo[df_periodo["local"].isin(filial_sel)]
+    df_periodo = df_periodo[df_periodo["local"].astype(str).isin(filial_sel)]
 else:
     st.sidebar.warning("Nenhuma filial encontrada nos dados.")
     st.stop()
@@ -219,7 +251,7 @@ if df_periodo.empty:
 st.sidebar.subheader("👤 Colaboradores")
 
 if "conferente" in df_periodo.columns:
-    colaboradores = sorted(df_periodo["conferente"].dropna().unique())
+    colaboradores = sorted(df_periodo["conferente"].dropna().astype(str).unique())
 else:
     colaboradores = []
 
@@ -229,7 +261,7 @@ if colaboradores:
         options=colaboradores,
         default=colaboradores,
     )
-    df_periodo = df_periodo[df_periodo["conferente"].isin(colaborador_sel)]
+    df_periodo = df_periodo[df_periodo["conferente"].astype(str).isin(colaborador_sel)]
 else:
     st.sidebar.warning("Nenhum colaborador encontrado nos dados.")
     st.stop()
